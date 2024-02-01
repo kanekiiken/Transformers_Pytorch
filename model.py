@@ -25,10 +25,10 @@ class InputEmbeddings(nn.Module):
 class Postional_Encoding(nn.Module):
     """Some Information about Postional_Encoding"""
 
-    def __init__(self, d_model: int, max_len: int = 5000, dropout: float = 0.1):
+    def __init__(self, d_model: int, max_len: int = 5000):
         super(Postional_Encoding, self).__init__()
 
-        self.dropout = nn.Dropout(p=dropout)
+        # self.dropout = nn.Dropout(p=dropout)
 
         # matrix pos_emb (max_len, d_model)
         pos_emb = torch.zeros(max_len, d_model)
@@ -54,6 +54,22 @@ class Postional_Encoding(nn.Module):
     def forward(self, x):
         x = x + self.pos_emb[:, : x.shape[1], :]
         return x
+
+
+class TransformerEmbedding(nn.Module):
+    """Some Information about TransformerEmbedding"""
+
+    def __init__(self, vocab_size: int, max_len: int, d_model: int, dropout: float):
+        super(TransformerEmbedding, self).__init__()
+
+        self.embedding = InputEmbeddings(vocab_size, d_model)
+        self.pos_embedding = Postional_Encoding(d_model, max_len)
+        self.dropout = nn.Dropout(p=dropout)
+
+    def forward(self, x):
+        emb = self.embedding(x)
+        pos_emb = self.pos_embedding(emb)
+        return self.dropout(emb + pos_emb)
 
 
 # https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html
@@ -200,6 +216,7 @@ class EncoderBlock(nn.Module):
 
     def forward(self, x, src_mask):
         _x = x
+
         # compute self-attention
         x = self.self_attention_layer(x, x, x, src_mask)
         x = self.dropout_1(x)
@@ -211,4 +228,176 @@ class EncoderBlock(nn.Module):
         x = self.dropout_2(x)
         x = self.layer_norm_2(x + _x)
 
+        return x
+
+
+class DecoderBlock(nn.Module):
+    """Some Information about DecoderBlock"""
+
+    def __init__(self, d_model: int, ffn_hidden: int, n_head: int, dropout: float):
+        super(DecoderBlock, self).__init__()
+
+        # decoder architecture
+        self.self_attention = MultiHeadAttentionBlock(d_model, n_head)
+        self.layer_norm_1 = LayerNormalisation(d_model)
+        self.dropout_1 = nn.Dropout(p=dropout)
+
+        self.cross_attention = MultiHeadAttentionBlock(d_model, n_head)
+        self.layer_norm_2 = LayerNormalisation(d_model)
+        self.dropout_2 = nn.Dropout(p=dropout)
+
+        self.feed_forward_layer = FeedForwardLayer(d_model, ffn_hidden, dropout)
+        self.layer_norm_3 = LayerNormalisation(d_model)
+        self.dropout_3 = nn.Dropout(p=dropout)
+
+    def forward(self, dec, enc, trg_mask, src_mask):
+        _x = dec
+
+        x = self.self_attention(dec, dec, dec, trg_mask)
+        x = self.dropout_1(x)
+        x = self.layer_norm_1(x + _x)
+
+        if enc is not None:
+            _x = x
+            x = self.cross_attention(dec, enc, enc, src_mask)
+            x = self.dropout_2(x)
+            x = self.layer_norm_2(x + _x)
+
+        _x = x
+        x = self.feed_forward_layer(x)
+        x = self.dropout_3(x)
+        x = self.layer_norm_3(x + _x)
+
+        return x
+
+
+class Encoder(nn.Module):
+    """Some Information about Encoder"""
+
+    def __init__(
+        self,
+        vocab_size: int,
+        max_len: int,
+        n_layer: int,
+        d_model: int,
+        n_head: int,
+        ffn_hidden: int,
+        dropout: float,
+    ):
+        super(Encoder, self).__init__()
+        self.embedding = TransformerEmbedding(vocab_size, max_len, d_model, dropout)
+
+        self.layers = nn.ModuleList(
+            [EncoderBlock(d_model, ffn_hidden, n_head, dropout) for _ in range(n_layer)]
+        )
+
+    def forward(self, x, src_mask):
+        # Input x : (batch, seq_len)
+        # src/trg_mask : (seq_len, seq_len)
+
+        x = self.embedding(x)  # (batch, seq_len, d_model)
+
+        for layer in self.layers:
+            x = layer(x, src_mask)  # (batch, seq_len, d_model)
+
+        return x
+
+
+class Decoder(nn.Module):
+    """Some Information about Decoder"""
+
+    def __init__(
+        self,
+        vocab_size: int,
+        max_len: int,
+        n_layer: int,
+        d_model: int,
+        n_head: int,
+        ffn_hidden: int,
+        dropout: float,
+    ):
+        super(Decoder, self).__init__()
+
+        self.embedding = TransformerEmbedding(vocab_size, max_len, d_model, dropout)
+
+        self.layers = nn.ModuleList(
+            [EncoderBlock(d_model, ffn_hidden, n_head, dropout) for _ in range(n_layer)]
+        )
+
+        # self.linear = nn.Linear(d_model, vocab_size)
+
+    def forward(self, trg, enc_out, src_mask, trg_mask):
+        # trg : (batch, seq_len)
+        # enc_out : (batch, seq_len, d_model)
+        # src/trg_mask : (seq_len, seq_len)
+
+        x = self.embedding(trg)
+
+        for layer in self.layers:
+            x = layer(trg, enc_out, src_mask, trg_mask)
+
+        # x = self.linear(x)  # (batch, vocab_size)
+
+        return x
+
+
+class ProjectionLayer(nn.Module):
+    """Some Information about ProjectionLayer"""
+
+    def __init__(self, d_model: int, vocab_size: int):
+        super(ProjectionLayer, self).__init__()
+        self.proj = nn.Linear(d_model, vocab_size)
+        # self.softmax = torch.log_softmax()
+
+    def forward(self, x):
+        return torch.log_softmax(self.proj(x), dim=-1)
+
+
+class Transformer(nn.Module):
+    """Some Information about Transformer"""
+
+    def __init__(
+        self,
+        src_vocab_size: int,
+        trg_vocab_size: int,
+        src_seq_len: int,
+        trg_seq_len: int,
+        n_encoder: int,
+        n_decoder: int,
+        d_model: int,
+        n_head: int,
+        d_ffn: int,
+        dropout: float,
+    ):
+        super(Transformer, self).__init__()
+        self.src_vs = src_vocab_size
+        self.trg_vs = trg_vocab_size
+
+        # encoders
+        self.encoder = Encoder(
+            src_vocab_size, src_seq_len, n_encoder, d_model, n_head, d_ffn, dropout
+        )
+
+        # decoder
+        self.decoder = Decoder(
+            trg_vocab_size, trg_seq_len, n_decoder, d_model, n_head, d_ffn, dropout
+        )
+
+        # projection layer
+        self.projection = ProjectionLayer(d_model, trg_vocab_size)
+
+    def encode(self, x, src_mask):
+        return self.encoder(x, src_mask)
+
+    def decode(self, trg, enc_out, src_mask, trg_mask):
+        return self.decode(trg, enc_out, src_mask, trg_mask)
+
+    def project(self, x):
+        return self.projection(x)
+
+    def forward(self, x):
+        # input x: (batch, src_seq_len)
+        x = self.encode(x)
+        x = self.decode(x)
+        x = self.project(x)
         return x
