@@ -389,15 +389,15 @@ class Transformer(nn.Module):
     def encode(self, x, src_mask):
         return self.encoder(x, src_mask)
 
-    def decode(self, trg, enc_out, src_mask, trg_mask):
-        return self.decode(trg, enc_out, src_mask, trg_mask)
+    def decode(self, trg, enc_out, src_mask, tgt_mask):
+        return self.decode(trg, enc_out, src_mask, tgt_mask)
 
     def project(self, x):
         return self.projection(x)
 
-    def forward(self, x):
+    def forward(self, src_in, tgt_in, src_mask, tgt_mask):
         # input x: (batch, src_seq_len)
-        x = self.encode(x)
-        x = self.decode(x)
-        x = self.project(x)
+        enc_out = self.encode(src_in, src_mask)
+        dec_out = self.decode(tgt_in, enc_out, src_mask, tgt_mask)
+        x = self.project(dec_out)
         return x
